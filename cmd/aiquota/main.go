@@ -7,6 +7,8 @@ import (
 
 	"github.com/chuongtrh/ai-quota/internal/appcore"
 	"github.com/chuongtrh/ai-quota/internal/config"
+	"github.com/chuongtrh/ai-quota/internal/health"
+	"github.com/chuongtrh/ai-quota/internal/notify"
 	"github.com/chuongtrh/ai-quota/internal/provider/antigravity"
 	"github.com/chuongtrh/ai-quota/internal/provider/claude"
 	"github.com/chuongtrh/ai-quota/internal/provider/codex"
@@ -51,7 +53,17 @@ func main() {
 	codexInstaller := codex.Installer{Paths: paths}
 	claudeInstaller := claude.Installer{Paths: paths, Executable: executable}
 	antigravityInstaller := antigravity.Installer{Paths: paths, Executable: executable}
-	tray.New(service, codexInstaller, claudeInstaller, antigravityInstaller, version).Run()
+	if connected, err := claudeInstaller.IsConnected(); err == nil && connected {
+		if err := claudeInstaller.Connect(); err != nil {
+			fmt.Fprintln(os.Stderr, "Update Claude bridge:", err)
+		}
+	}
+	if connected, err := antigravityInstaller.IsConnected(); err == nil && connected {
+		if err := antigravityInstaller.Connect(); err != nil {
+			fmt.Fprintln(os.Stderr, "Update Antigravity bridge:", err)
+		}
+	}
+	tray.New(service, health.New(paths.DataDir, notify.Send), codexInstaller, claudeInstaller, antigravityInstaller, version).Run()
 }
 
 func fatal(err error) {

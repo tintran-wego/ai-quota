@@ -243,3 +243,7 @@ go.mod                       Go module and dependency versions
 ## License
 
 MIT
+
+## Connection readiness
+
+AIQuota also monitors MCP connections, local fs-log-data readiness, and the maintained Flights Shopping Hub preflight. Open the native readiness window for scoped results and repair actions. See [readiness configuration and verification](docs/readiness.md).

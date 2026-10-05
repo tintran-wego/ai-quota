@@ -10,6 +10,8 @@ import (
 	"fyne.io/systray"
 
 	"github.com/chuongtrh/ai-quota/internal/appcore"
+	"github.com/chuongtrh/ai-quota/internal/desktop"
+	"github.com/chuongtrh/ai-quota/internal/health"
 	appicon "github.com/chuongtrh/ai-quota/internal/icon"
 	"github.com/chuongtrh/ai-quota/internal/model"
 	"github.com/chuongtrh/ai-quota/internal/notify"
@@ -19,6 +21,11 @@ import (
 )
 
 type App struct {
+	health                *health.Service
+	actions               map[int]health.Action
+	healthSummary         *systray.MenuItem
+	checkHealth           *systray.MenuItem
+	details               *systray.MenuItem
 	service               *appcore.Service
 	codexInstaller        codex.Installer
 	claudeInstaller       claude.Installer
@@ -109,6 +116,7 @@ var providerOrder = []model.Provider{
 
 func New(
 	service *appcore.Service,
+	healthService *health.Service,
 	codexInstaller codex.Installer,
 	claudeInstaller claude.Installer,
 	antigravityInstaller antigravity.Installer,
@@ -117,6 +125,8 @@ func New(
 	ctx, cancel := context.WithCancel(context.Background())
 	return &App{
 		service:              service,
+		health:               healthService,
+		actions:              map[int]health.Action{},
 		codexInstaller:       codexInstaller,
 		claudeInstaller:      claudeInstaller,
 		antigravityInstaller: antigravityInstaller,
@@ -167,8 +177,12 @@ func (a *App) onReady() {
 		items.Hide()
 		a.quotaItems[provider] = items
 	}
+	desktop.Configure()
 	a.waiting = disabledItem("⏳ Waiting for provider setup")
 	systray.AddSeparator()
+	a.healthSummary = disabledItem("Connections: waiting for checks")
+	a.checkHealth = systray.AddMenuItem("Check connections now", "Run read-only health probes")
+	a.details = systray.AddMenuItem("Open readiness window", "View connection issues and sign-in actions")
 	disabledItem("🔔 Alerts at 20% and 5% remaining")
 	a.updated = disabledItem("🔄 Not updated yet")
 	a.refresh = systray.AddMenuItem("↻ Refresh now", "Fetch the latest quota data")
@@ -201,8 +215,9 @@ func (a *App) onReady() {
 
 	notify.RequestPermission()
 	go a.service.Refresh(a.ctx)
-	go a.eventLoop()
+	go a.health.Check(a.ctx)
 	a.updateMenu()
+	go a.eventLoop()
 }
 
 func (a *App) eventLoop() {
@@ -217,7 +232,24 @@ func (a *App) eventLoop() {
 		case <-refreshTicker.C:
 			go a.service.Refresh(a.ctx)
 		case <-uiTicker.C:
+			if a.health.Due() || a.health.ConsumeAuthCompletion() {
+				go a.health.Check(a.ctx)
+			}
 			a.updateMenu()
+		case <-a.health.Updates:
+			a.updateMenu()
+		case <-a.checkHealth.ClickedCh:
+			go a.health.Check(a.ctx)
+		case <-a.details.ClickedCh:
+			desktop.Show()
+		case id := <-desktop.Events:
+			a.nativeAction(id)
+		case path := <-desktop.Workspaces:
+			if err := a.health.AddWorkspace(path); err != nil {
+				a.reportActionError(err)
+			} else {
+				go a.health.Check(a.ctx)
+			}
 		case <-a.refresh.ClickedCh:
 			go a.service.Refresh(a.ctx)
 		case <-a.providerItems[model.ProviderCodex].action.ClickedCh:
@@ -268,19 +300,18 @@ func (a *App) updateMenu() {
 		a.waiting.Hide()
 	}
 
-	if remaining, provider, ok := mostUrgentRemaining(statuses, visibleProviders, time.Now()); ok {
-		severity := model.SeverityForRemaining(float64(remaining))
-		systray.SetIcon(appicon.TrayColorPNG(36, severity, true))
-
-		providerName := provider.DisplayName()
-		if provider == model.ProviderAntigravity {
-			providerName = "Antigravity"
-		}
-		systray.SetTitle(fmt.Sprintf("%s %d%%", providerName, remaining))
-	} else {
-		systray.SetIcon(appicon.TrayColorPNG(36, model.SeverityHealthy, false))
-		systray.SetTitle("—")
+	remaining, _, available := mostUrgentRemaining(statuses, visibleProviders, time.Now())
+	report := a.health.Snapshot()
+	severity := model.SeverityHealthy
+	if available {
+		severity = model.SeverityForRemaining(float64(remaining))
 	}
+	if report.Issues() > 0 {
+		severity = model.SeverityCritical
+	}
+	systray.SetIcon(appicon.TrayColorPNG(36, severity, available || report.Issues() > 0))
+	systray.SetTitle(badgeTitle(report, remaining, available))
+	a.updateReadiness(statuses)
 
 	var tooltipLines []string
 	tooltipLines = append(tooltipLines, "AI quota")
@@ -639,4 +670,8 @@ func formatAgo(duration time.Duration) string {
 	default:
 		return fmt.Sprintf("%d days ago", int(duration/(24*time.Hour)))
 	}
+}
+
+func (a *App) reportActionError(err error) {
+	_ = notify.Send("AIQuota action could not start", err.Error())
 }

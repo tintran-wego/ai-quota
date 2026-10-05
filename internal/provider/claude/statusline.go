@@ -69,7 +69,7 @@ func RunBridge(paths config.Paths, input io.Reader, output io.Writer) error {
 	}
 	status, parseErr := ParseStatusLine(data, time.Now())
 	if parseErr == nil {
-		_ = storage.WriteJSON(paths.ClaudeCache(), status, 0o600)
+		_ = CacheQuota(paths, status, time.Now())
 	}
 
 	previousOutput := runPreviousStatusLine(paths, data)
