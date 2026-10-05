@@ -18,7 +18,7 @@ var ansi = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
 
 func probeClaude(ctx context.Context, workspace string, now time.Time) []Check {
 	data, err := runCommand(ctx, workspace, "claude", "mcp", "list")
-	checks := parseClaudeMCPWithConnections(string(data), workspace, now, claudeKnownConnections())
+	checks := parseClaudeMCP(string(data), workspace, now)
 	if err != nil || len(checks) == 0 {
 		detail := "No MCP results. Plugin or app-managed connectors may need a check in Claude."
 		if err != nil {
@@ -29,13 +29,9 @@ func probeClaude(ctx context.Context, workspace string, now time.Time) []Check {
 	return checks
 }
 
+// A cloud catalog row does not prove that the user has added the connector.
+// Only a successful current handshake can be classified from this inventory.
 func parseClaudeMCP(output, workspace string, now time.Time) []Check {
-	return parseClaudeMCPWithConnections(output, workspace, now, nil)
-}
-
-// Claude lists available cloud integrations as well as connected MCP servers.
-// A catalog entry that was never connected is not a broken user connection.
-func parseClaudeMCPWithConnections(output, workspace string, now time.Time, known map[string]bool) []Check {
 	result := []Check{}
 	unverifiedCloud := 0
 	for _, line := range strings.Split(ansi.ReplaceAllString(output, ""), "\n") {
@@ -49,8 +45,8 @@ func parseClaudeMCPWithConnections(output, workspace string, now time.Time, know
 		}
 		name := strings.TrimSpace(line[:nameEnd])
 		status := strings.ToLower(line[split+3:])
-		connected := strings.Contains(status, "connected") && !strings.Contains(status, "not connected")
-		if strings.HasPrefix(name, "claude.ai ") && !connected && !known[name] {
+		connected := strings.TrimSpace(strings.TrimLeft(status, "✓✔✅ ")) == "connected"
+		if strings.HasPrefix(name, "claude.ai ") && !connected {
 			unverifiedCloud++
 			continue
 		}
@@ -75,35 +71,9 @@ func parseClaudeMCPWithConnections(output, workspace string, now time.Time, know
 		result = append(result, c)
 	}
 	if unverifiedCloud > 0 {
-		result = append(result, Check{ID: "claude/" + workspace + "/cloud-coverage", Host: "Claude Code", Scope: workspace, Name: "Claude app connectors", State: Unknown, CheckedAt: now, Detail: fmt.Sprintf("%d available integrations have no recorded connection; verify intended connectors in Claude settings", unverifiedCloud)})
+		result = append(result, Check{ID: "claude/" + workspace + "/cloud-coverage", Host: "Claude Code", Scope: workspace, Name: "Claude app connectors", State: Unknown, CheckedAt: now, Detail: "Cloud connector selection and authentication are not verified by this inventory"})
 	}
 	return result
-}
-
-func claudeKnownConnections() map[string]bool {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	path := filepath.Join(home, ".claude.json")
-	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
-		path = filepath.Join(dir, ".claude.json")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var config struct {
-		Connected []string `json:"claudeAiMcpEverConnected"`
-	}
-	if json.Unmarshal(data, &config) != nil {
-		return nil
-	}
-	known := make(map[string]bool, len(config.Connected))
-	for _, name := range config.Connected {
-		known[name] = true
-	}
-	return known
 }
 
 type rpcClient struct {

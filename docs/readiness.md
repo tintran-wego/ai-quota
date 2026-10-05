@@ -6,7 +6,7 @@ The compact status item uses a stable macOS autosave name and an initial positio
 
 ## Checks
 
-- Claude Code: `claude mcp list` in each monitored workspace. Cloud catalog entries without a recorded connection are unverified coverage, not login tasks. Known cloud connections and configured MCPs keep their observed auth status. A successful handshake does not prove backend permissions. Failures must occur twice before an alert.
+- Claude Code: `claude mcp list` in each monitored workspace. Cloud connector listings can include available or historical integrations. Historical connection records do not prove that a connector is currently added. A current successful cloud handshake is retained; every other cloud result is one unverified coverage row with no login task. Configured local and plugin MCPs keep their observed auth status. A successful handshake does not prove backend permissions. Failures must occur twice before an alert.
 - Codex: a separate app-server reads MCP auth status and the tool catalog. Before offering OAuth login, AIQuota verifies that the transport uses OAuth. Bearer or header credentials remain unverified until a backend probe can check them. Enabled app connectors remain Unknown because the catalog does not prove live OAuth or backend access.
 - fs-log-data: the local `/api/readiness?force=1` endpoint runs BigQuery dry-run, Athena, Glue, Redis, and API probes. Only loopback URLs are allowed. Stale results remain Unknown.
 - Flights Shopping Hub: the maintained checkout's read-only `preflight.py` checks the selected repository profiles. It checks VPN, tunnels, Jenkins, Docker, AWS, and Cognito as required by those profiles. MCP registration alone remains Unknown.
