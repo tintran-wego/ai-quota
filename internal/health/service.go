@@ -11,21 +11,32 @@ import (
 )
 
 type Service struct {
-	Updates   chan struct{}
-	mu        sync.Mutex
-	config    Config
-	dataDir   string
-	report    Report
-	lastCheck time.Time
-	failures  map[string]int
-	notified  map[string]State
-	notify    func(string, string) error
-	now       func() time.Time
+	Updates      chan struct{}
+	mu           sync.Mutex
+	config       Config
+	dataDir      string
+	report       Report
+	lastCheck    time.Time
+	failures     map[string]int
+	notified     map[string]State
+	notify       func(string, string) error
+	now          func() time.Time
+	actions      map[string]ActionStatus
+	launchAction func(context.Context, Action, string) error
+	afterAuth    bool
+	checking     bool
+	actionWG     sync.WaitGroup
+	closing      bool
+}
+
+type ActionStatus struct {
+	Running bool
+	Error   string
 }
 
 func New(dataDir string, notify func(string, string) error) *Service {
 	home, _ := os.UserHomeDir()
-	s := &Service{Updates: make(chan struct{}, 1), dataDir: dataDir, config: Config{ReadinessURL: "http://localhost:3000/api/readiness", Workspaces: []string{home}, IntervalMinutes: 5}, failures: map[string]int{}, notified: map[string]State{}, notify: notify, now: time.Now}
+	s := &Service{Updates: make(chan struct{}, 1), dataDir: dataDir, config: Config{ReadinessURL: "http://localhost:3000/api/readiness", Workspaces: []string{home}, IntervalMinutes: 5}, failures: map[string]int{}, notified: map[string]State{}, notify: notify, now: time.Now, actions: map[string]ActionStatus{}, launchAction: LaunchAction}
 	if err := storage.ReadJSON(filepath.Join(dataDir, "health-config.json"), &s.config); os.IsNotExist(err) {
 		_ = storage.WriteJSON(filepath.Join(dataDir, "health-config.json"), s.config, 0o600)
 	}
@@ -60,6 +71,7 @@ func (s *Service) Snapshot() Report {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := s.report
+	r.Checking = s.checking
 	r.Checks = append([]Check(nil), r.Checks...)
 	for i := range r.Checks {
 		if s.now().Sub(r.Checks[i].CheckedAt) > time.Duration(s.config.IntervalMinutes*2+1)*time.Minute && r.Checks[i].State != Disabled {
@@ -73,7 +85,7 @@ func (s *Service) Snapshot() Report {
 func (s *Service) Due() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return !s.report.Checking && s.now().Sub(s.lastCheck) >= time.Duration(s.config.IntervalMinutes)*time.Minute
+	return !s.checking && s.now().Sub(s.lastCheck) >= time.Duration(s.config.IntervalMinutes)*time.Minute
 }
 func (s *Service) AddWorkspace(path string) error {
 	path, err := filepath.Abs(path)
@@ -103,7 +115,7 @@ func (s *Service) AddWorkspace(path string) error {
 
 func (s *Service) Check(ctx context.Context) {
 	s.mu.Lock()
-	if s.report.Checking {
+	if s.checking {
 		s.mu.Unlock()
 		return
 	}
@@ -112,7 +124,10 @@ func (s *Service) Check(ctx context.Context) {
 		s.config = updated
 	}
 	s.report.Checking = true
+	s.checking = true
+	s.afterAuth = false
 	s.mu.Unlock()
+	defer s.checkAfterAuth(ctx)
 	config := s.Config()
 	now := s.now()
 	type task func(context.Context) []Check
@@ -213,5 +228,71 @@ func (s *Service) ConsumeAuthCompletion() bool {
 	return true
 }
 func (s *Service) RunAction(ctx context.Context, a Action) error {
-	return LaunchAction(ctx, a, s.dataDir)
+	key := taskKey(Check{Action: &a})
+	s.mu.Lock()
+	if s.closing || ctx.Err() != nil {
+		s.mu.Unlock()
+		return context.Canceled
+	}
+	if s.actions[key].Running {
+		s.mu.Unlock()
+		return nil
+	}
+	s.actionWG.Add(1)
+	defer s.actionWG.Done()
+	s.actions[key] = ActionStatus{Running: true}
+	s.mu.Unlock()
+	s.actionUpdate()
+	err := s.launchAction(ctx, a, s.dataDir)
+	s.mu.Lock()
+	status := ActionStatus{}
+	if err != nil {
+		status.Error = err.Error()
+	}
+	s.actions[key] = status
+	if err == nil && a.Kind != "open-app" && a.Kind != "tunnel" {
+		s.afterAuth = true
+	}
+	s.mu.Unlock()
+	s.actionUpdate()
+	if err == nil && a.Kind != "open-app" && a.Kind != "tunnel" {
+		s.Check(ctx)
+	}
+	return err
+}
+
+// Call after cancelling the app context. Wait for callback processes to stop
+// before the Go runtime exits, and reject sign-ins queued during shutdown.
+func (s *Service) WaitActions() {
+	s.mu.Lock()
+	s.closing = true
+	s.mu.Unlock()
+	s.actionWG.Wait()
+}
+
+func (s *Service) checkAfterAuth(ctx context.Context) {
+	s.mu.Lock()
+	// Keep checks single-flight through persistence, so an older probe cannot
+	// overwrite the fresh report after a completed sign-in.
+	s.checking = false
+	s.report.Checking = false
+	needed := s.afterAuth
+	s.mu.Unlock()
+	s.actionUpdate()
+	if needed && ctx.Err() == nil {
+		s.Check(ctx)
+	}
+}
+
+func (s *Service) ActionStatus(a Action) ActionStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.actions[taskKey(Check{Action: &a})]
+}
+
+func (s *Service) actionUpdate() {
+	select {
+	case s.Updates <- struct{}{}:
+	default:
+	}
 }

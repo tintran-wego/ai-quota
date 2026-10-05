@@ -63,7 +63,8 @@ static AQDesktop *desktop;
   [self label:task[@"title"] frame:NSMakeRect(16,y,right-144,22) size:14 bold:YES];
   NSInteger identifier=[action[@"id"] integerValue];
   if(identifier==0)identifier=-3;
-  [self button:action[@"title"] ?: @"Show details" identifier:identifier frame:NSMakeRect(right-124,y-2,124,28)];
+  NSButton *repair=[self button:action[@"title"] ?: @"Show details" identifier:identifier frame:NSMakeRect(right-124,y-2,124,28)];
+  repair.enabled=![action[@"disabled"] boolValue];
   [self label:task[@"detail"] frame:NSMakeRect(16,y+26,right-16,34) size:12 bold:NO];
   NSString *scope=task[@"scope"];
   if(scope.length){

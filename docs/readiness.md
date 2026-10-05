@@ -11,7 +11,7 @@ The compact status item uses a stable macOS autosave name and an initial positio
 - fs-log-data: the local `/api/readiness?force=1` endpoint runs BigQuery dry-run, Athena, Glue, Redis, and API probes. Only loopback URLs are allowed. Stale results remain Unknown.
 - Flights Shopping Hub: the maintained checkout's read-only `preflight.py` checks the selected repository profiles. It checks VPN, tunnels, Jenkins, Docker, AWS, and Cognito as required by those profiles. MCP registration alone remains Unknown.
 
-Checks run every five minutes, after wake, on Check now, and after a completed Terminal login. Alerts occur on a change to a confirmed failure or expired auth. Unknown results do not claim recovery. A successful check clears the issue badge. Credentials remain in the original host or probe store. AIQuota saves sanitized results, not raw diagnostics or credentials.
+Checks run every five minutes, after wake, on Check now, and after a completed sign-in. A sign-in that finishes during another probe queues a fresh check. Alerts occur on a change to a confirmed failure or expired auth. Unknown results do not claim recovery. A successful check clears the issue badge. Credentials remain in the original host or probe store. AIQuota saves sanitized results, not raw diagnostics or credentials.
 
 ## Configuration
 
@@ -29,7 +29,11 @@ Use **Monitor workspace** to add a project directory. Use **Monitor settings** t
 
 An empty readiness URL disables that adapter. Hub checks are disabled until a checkout and repo list are configured. The adapter runs from `ai/tool`; it does not install plugins or alter Hub configuration. Probe tasks have a 90-second deadline. The Hub adapter runs up to four canonical checks at a time and retains completed results if the deadline expires. MCP registration is checked separately to avoid a second slow sweep. A timeout remains Unknown.
 
-Repair actions use a fixed allowlist. MCP login opens the correct host CLI in Terminal. AWS SSO login requires an explicit profile from the readiness response or the fs-log-data credential source selector. No profile is inferred from the environment name. GCP login is offered only for an explicit ADC source. Cognito refresh uses the maintained Hub browser script. Docker and VPN buttons open their apps. Tunnel buttons run the existing `blackhole_us_staging` or `blackhole_us_production` shell function. Missing Jenkins secrets and unverified cloud connectors require repair in their existing settings.
+Repair actions use a fixed allowlist. **Sign in** opens the browser through the owning host's supported login command, with no Terminal window. AIQuota keeps the callback process alive until completion and shows progress or a short failure beside the button. Duplicate clicks cannot start a second callback for the same repair. Claude receives an invisible PTY because its CLI requires a terminal during the callback; its process group is cancelled on Quit or when the login deadline expires. Login output is discarded. Credentials stay in their existing stores.
+
+AWS SSO login requires an explicit profile from the readiness response or the fs-log-data credential source selector. No profile is inferred from the environment name. GCP login is offered only for an explicit ADC source. Cognito refresh uses the maintained Hub browser script, which saves its own Playwright state after browser sign-in. Docker and VPN buttons open their apps. Only the tunnel buttons open Terminal to run the existing `blackhole_us_staging` or `blackhole_us_production` shell function. Missing Jenkins secrets and unverified cloud connectors require repair in their existing settings.
+
+The supported Codex OAuth command is documented in [OpenAI MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli). Opening a browser or completing sign-in does not prove backend access; the subsequent probe must succeed before the issue clears.
 
 ## Claude quota
 

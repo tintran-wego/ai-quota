@@ -6,9 +6,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chuongtrh/ai-quota/internal/desktop"
 	"github.com/chuongtrh/ai-quota/internal/health"
 	"github.com/chuongtrh/ai-quota/internal/model"
 )
+
+func TestSignInShowsProgressAndRetryableFailure(t *testing.T) {
+	task := desktop.Task{Detail: "Sign-in expired or required.", Action: desktop.Button{Title: "Sign in"}}
+	applyActionStatus(&task, health.ActionStatus{Running: true})
+	if !task.Action.Disabled || !strings.Contains(task.Detail, "browser") {
+		t.Fatal("active sign-in must show browser guidance and prevent duplicate clicks")
+	}
+	task = desktop.Task{Action: desktop.Button{Title: "Sign in"}}
+	applyActionStatus(&task, health.ActionStatus{Error: "Sign-in timed out. Try again."})
+	if task.Action.Disabled || task.Action.Title != "Sign in" || task.Detail != "Sign-in timed out. Try again." {
+		t.Fatal("failed sign-in must show a retryable error beside its button")
+	}
+}
 
 func TestBadgeReflectsKnownBadAndRecovery(t *testing.T) {
 	report := health.Report{CheckedAt: time.Now(), Checks: []health.Check{{State: health.NeedsAuth}}}

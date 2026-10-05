@@ -1,8 +1,9 @@
 package desktop
 
 type Button struct {
-	ID    int    `json:"id"`
-	Title string `json:"title"`
+	ID       int    `json:"id"`
+	Title    string `json:"title"`
+	Disabled bool   `json:"disabled,omitempty"`
 }
 
 type Task struct {

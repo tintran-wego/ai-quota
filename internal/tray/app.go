@@ -553,6 +553,7 @@ func providerVisible(provider model.Provider, status model.ProviderStatus, conne
 
 func (a *App) onExit() {
 	a.cancel()
+	a.health.WaitActions()
 }
 
 func disabledItem(title string) *systray.MenuItem {
@@ -673,5 +674,5 @@ func formatAgo(duration time.Duration) string {
 }
 
 func (a *App) reportActionError(err error) {
-	_ = notify.Send("AIQuota action could not start", err.Error())
+	_ = notify.Send("AIQuota action failed", err.Error())
 }

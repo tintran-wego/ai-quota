@@ -49,8 +49,19 @@ func (a *App) updateReadiness(statuses map[model.Provider]model.ProviderStatus) 
 		}
 		a.actions[id] = *task.Check.Action
 		view.Tasks[i].Action.ID = id
+		applyActionStatus(&view.Tasks[i], a.health.ActionStatus(*task.Check.Action))
 	}
 	desktop.Update(view)
+}
+
+func applyActionStatus(task *desktop.Task, status health.ActionStatus) {
+	if status.Running {
+		task.Action.Title = "Signing in…"
+		task.Action.Disabled = true
+		task.Detail = "Complete sign-in in the browser. This connection will be checked again."
+	} else if status.Error != "" {
+		task.Detail = status.Error
+	}
 }
 
 func readinessView(report health.Report, statuses map[model.Provider]model.ProviderStatus, now time.Time) desktop.View {
