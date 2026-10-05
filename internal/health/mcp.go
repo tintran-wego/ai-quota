@@ -18,7 +18,7 @@ var ansi = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
 
 func probeClaude(ctx context.Context, workspace string, now time.Time) []Check {
 	data, err := runCommand(ctx, workspace, "claude", "mcp", "list")
-	checks := parseClaudeMCP(string(data), workspace, now)
+	checks := parseClaudeMCPWithConnections(string(data), workspace, now, claudeKnownConnections())
 	if err != nil || len(checks) == 0 {
 		detail := "No MCP results. Plugin or app-managed connectors may need a check in Claude."
 		if err != nil {
@@ -30,7 +30,14 @@ func probeClaude(ctx context.Context, workspace string, now time.Time) []Check {
 }
 
 func parseClaudeMCP(output, workspace string, now time.Time) []Check {
+	return parseClaudeMCPWithConnections(output, workspace, now, nil)
+}
+
+// Claude lists available cloud integrations as well as connected MCP servers.
+// A catalog entry that was never connected is not a broken user connection.
+func parseClaudeMCPWithConnections(output, workspace string, now time.Time, known map[string]bool) []Check {
 	result := []Check{}
+	unverifiedCloud := 0
 	for _, line := range strings.Split(ansi.ReplaceAllString(output, ""), "\n") {
 		split := strings.LastIndex(line, " - ")
 		if split < 0 {
@@ -42,6 +49,11 @@ func parseClaudeMCP(output, workspace string, now time.Time) []Check {
 		}
 		name := strings.TrimSpace(line[:nameEnd])
 		status := strings.ToLower(line[split+3:])
+		connected := strings.Contains(status, "connected") && !strings.Contains(status, "not connected")
+		if strings.HasPrefix(name, "claude.ai ") && !connected && !known[name] {
+			unverifiedCloud++
+			continue
+		}
 		c := Check{ID: "claude/" + workspace + "/" + name, Host: "Claude Code", Scope: workspace, Name: name, State: Unknown, CheckedAt: now, Detail: "Status unavailable"}
 		switch {
 		case strings.Contains(status, "needs authentication"):
@@ -56,13 +68,42 @@ func parseClaudeMCP(output, workspace string, now time.Time) []Check {
 		case strings.Contains(status, "disabled") || strings.Contains(status, "rejected"):
 			c.State = Disabled
 			c.Detail = "Disabled or rejected for this workspace"
-		case strings.Contains(status, "connected"):
+		case connected:
 			c.State = OK
 			c.Detail = "MCP handshake succeeded; backend access is checked separately"
 		}
 		result = append(result, c)
 	}
+	if unverifiedCloud > 0 {
+		result = append(result, Check{ID: "claude/" + workspace + "/cloud-coverage", Host: "Claude Code", Scope: workspace, Name: "Claude app connectors", State: Unknown, CheckedAt: now, Detail: fmt.Sprintf("%d available integrations have no recorded connection; verify intended connectors in Claude settings", unverifiedCloud)})
+	}
 	return result
+}
+
+func claudeKnownConnections() map[string]bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	path := filepath.Join(home, ".claude.json")
+	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		path = filepath.Join(dir, ".claude.json")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var config struct {
+		Connected []string `json:"claudeAiMcpEverConnected"`
+	}
+	if json.Unmarshal(data, &config) != nil {
+		return nil
+	}
+	known := make(map[string]bool, len(config.Connected))
+	for _, name := range config.Connected {
+		known[name] = true
+	}
+	return known
 }
 
 type rpcClient struct {
@@ -158,9 +199,16 @@ func probeCodex(ctx context.Context, workspace string, now time.Time) []Check {
 		for _, server := range response.Data {
 			c := Check{ID: "codex/" + workspace + "/" + server.Name, Host: "Codex", Scope: workspace, Name: server.Name, State: Unknown, CheckedAt: now, Detail: "No tool catalog; backend and authentication are not verified"}
 			if server.Auth == "notLoggedIn" {
-				c.State = NeedsAuth
-				c.Detail = "MCP sign-in required"
-				c.Action = &Action{Kind: "mcp-login", Host: "codex", Target: server.Name, Workspace: workspace}
+				switch codexAuthMechanism(ctx, workspace, server.Name) {
+				case "oauth":
+					c.State = NeedsAuth
+					c.Detail = "MCP sign-in required"
+					c.Action = &Action{Kind: "mcp-login", Host: "codex", Target: server.Name, Workspace: workspace}
+				case "credential":
+					c.Detail = "Refresh the configured credential or verify request headers in Codex settings"
+				default:
+					c.Detail = "Authentication mechanism is unverified; check the server configuration in Codex"
+				}
 			} else if len(server.Tools) > 0 {
 				c.State = OK
 				c.Detail = "MCP tool catalog available; backend access is checked separately"
@@ -181,6 +229,36 @@ func probeCodex(ctx context.Context, workspace string, now time.Time) []Check {
 		checks = append(checks, fallback)
 	}
 	return checks
+}
+
+// Read the effective server through the CLI instead of guessing from authStatus.
+// Header values and tokens stay in this process and never enter a report.
+func codexAuthMechanism(ctx context.Context, workspace, name string) string {
+	data, err := runCommand(ctx, workspace, "codex", "mcp", "get", "--json", "--", name)
+	if err != nil {
+		return ""
+	}
+	return parseCodexAuthMechanism(data)
+}
+
+func parseCodexAuthMechanism(data []byte) string {
+	var config struct {
+		Transport struct {
+			Type          string                     `json:"type"`
+			BearerEnv     string                     `json:"bearer_token_env_var"`
+			Headers       map[string]json.RawMessage `json:"http_headers"`
+			EnvHeaders    map[string]json.RawMessage `json:"env_http_headers"`
+			HeadersHelper json.RawMessage            `json:"http_headers_helper"`
+		} `json:"transport"`
+	}
+	if json.Unmarshal(data, &config) != nil || config.Transport.Type != "streamable_http" {
+		return ""
+	}
+	t := config.Transport
+	if t.BearerEnv != "" || len(t.Headers) > 0 || len(t.EnvHeaders) > 0 || (len(t.HeadersHelper) > 0 && string(t.HeadersHelper) != "null") {
+		return "credential"
+	}
+	return "oauth"
 }
 
 // App accessibility is inventory, not a live OAuth probe. Never mark it healthy.

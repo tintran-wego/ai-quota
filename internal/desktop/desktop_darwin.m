@@ -3,12 +3,21 @@
 extern void aq_action(int identifier);
 extern void aq_workspace(char *path);
 
-@interface AQDesktop : NSObject <NSApplicationDelegate>
+@interface AQDocumentView : NSView
+@end
+@implementation AQDocumentView
+- (BOOL)isFlipped { return YES; }
+@end
+
+@interface AQDesktop : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property(nonatomic,strong) id originalDelegate;
 @property(nonatomic,strong) NSWindow *window;
-@property(nonatomic,strong) NSTextView *text;
-@property(nonatomic,strong) NSStackView *actions;
+@property(nonatomic,strong) NSScrollView *scroll;
+@property(nonatomic,strong) AQDocumentView *document;
 @property(nonatomic,strong) NSStatusItem *statusItem;
+@property(nonatomic,strong) NSDictionary *view;
+@property(nonatomic,assign) BOOL showDetails;
+@property(nonatomic,assign) BOOL showAllTasks;
 @end
 
 static AQDesktop *desktop;
@@ -21,50 +30,106 @@ static AQDesktop *desktop;
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)visible {
  (void)sender; (void)visible; [self showWindow]; aq_action(504); return YES;
 }
+- (NSTextField *)label:(NSString *)text frame:(NSRect)frame size:(CGFloat)size bold:(BOOL)bold {
+ NSTextField *label=[NSTextField wrappingLabelWithString:text ?: @""];
+ label.frame=frame;label.font=bold ? [NSFont boldSystemFontOfSize:size] : [NSFont systemFontOfSize:size];
+ label.selectable=YES;[self.document addSubview:label];return label;
+}
+- (NSButton *)button:(NSString *)title identifier:(NSInteger)identifier frame:(NSRect)frame {
+ NSButton *button=[NSButton buttonWithTitle:title target:self action:@selector(handleButton:)];
+ button.frame=frame;button.tag=identifier;[self.document addSubview:button];return button;
+}
+- (void)render {
+ if(!self.window || !self.view)return;
+ for(NSView *child in self.document.subviews){[child removeFromSuperview];}
+ CGFloat width=self.scroll.contentSize.width;
+ CGFloat right=width-16,y=16;
+ NSArray *tasks=[self.view[@"tasks"] isKindOfClass:NSArray.class] ? self.view[@"tasks"] : @[];
+ [self label:self.view[@"summary"] frame:NSMakeRect(16,y,right-240,44) size:17 bold:YES];
+ [self button:@"Check now" identifier:500 frame:NSMakeRect(right-212,y,100,28)];
+ NSPopUpButton *manage=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(right-104,y,104,28) pullsDown:YES];
+ [manage addItemWithTitle:@"Manage"];
+ for(NSDictionary *item in self.view[@"buttons"]){
+  [manage addItemWithTitle:item[@"title"]];manage.lastItem.tag=[item[@"id"] integerValue];
+ }
+ manage.target=self;manage.action=@selector(handleManage:);[self.document addSubview:manage];
+ y+=56;
+ if(tasks.count==0){
+  [self label:@"No action needed for confirmed checks." frame:NSMakeRect(16,y,right-16,22) size:13 bold:NO];y+=36;
+ }
+ NSUInteger count=self.showAllTasks ? tasks.count : MIN(tasks.count,5);
+ for(NSUInteger index=0;index<count;index++){
+  NSDictionary *task=tasks[index];NSDictionary *action=task[@"action"];
+  [self label:task[@"title"] frame:NSMakeRect(16,y,right-144,22) size:14 bold:YES];
+  NSInteger identifier=[action[@"id"] integerValue];
+  if(identifier==0)identifier=-3;
+  [self button:action[@"title"] ?: @"Show details" identifier:identifier frame:NSMakeRect(right-124,y-2,124,28)];
+  [self label:task[@"detail"] frame:NSMakeRect(16,y+26,right-16,34) size:12 bold:NO];
+  NSString *scope=task[@"scope"];
+  if(scope.length){
+   NSTextField *label=[self label:scope frame:NSMakeRect(16,y+62,right-16,18) size:11 bold:NO];label.textColor=NSColor.secondaryLabelColor;
+  }
+  NSBox *line=[[NSBox alloc] initWithFrame:NSMakeRect(16,y+86,right-16,1)];line.boxType=NSBoxSeparator;[self.document addSubview:line];
+  y+=92;
+ }
+ if(tasks.count>5){
+  NSString *title=self.showAllTasks ? @"Show fewer" : [NSString stringWithFormat:@"Show all %lu problems",(unsigned long)tasks.count];
+  [self button:title identifier:-2 frame:NSMakeRect(16,y,190,28)];y+=40;
+ }
+ [self label:@"Quota" frame:NSMakeRect(16,y,right-16,22) size:14 bold:YES];y+=26;
+ NSString *quota=self.view[@"quota"] ?: @"Waiting for quota data";
+ NSUInteger lines=[[quota componentsSeparatedByString:@"\n"] count];
+ CGFloat quotaHeight=MAX(22,lines*22);
+ [self label:quota frame:NSMakeRect(16,y,right-16,quotaHeight) size:12 bold:NO];y+=quotaHeight+16;
+ [self button:self.showDetails ? @"Hide details" : @"Show details" identifier:-1 frame:NSMakeRect(16,y,120,28)];y+=40;
+ if(self.showDetails){
+  NSScrollView *detailScroll=[[NSScrollView alloc] initWithFrame:NSMakeRect(16,y,right-16,360)];
+  detailScroll.hasVerticalScroller=YES;detailScroll.borderType=NSBezelBorder;
+  NSTextView *text=[[NSTextView alloc] initWithFrame:NSMakeRect(0,0,right-16,360)];
+  text.editable=NO;text.selectable=YES;text.font=[NSFont systemFontOfSize:12];
+  text.textContainerInset=NSMakeSize(10,10);text.autoresizingMask=NSViewWidthSizable;
+  text.textContainer.widthTracksTextView=YES;text.string=self.view[@"details"] ?: @"";
+  detailScroll.documentView=text;[self.document addSubview:detailScroll];y+=376;
+ }
+ [self.document setFrameSize:NSMakeSize(width,MAX(y,self.scroll.contentSize.height))];
+}
+- (void)windowDidResize:(NSNotification *)notification {(void)notification;[self render];}
 - (void)showWindow {
- if (!self.window) {
-  self.window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,760,600) styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable|NSWindowStyleMaskMiniaturizable) backing:NSBackingStoreBuffered defer:NO];
-  self.window.title=@"AIQuota readiness";
-  self.window.releasedWhenClosed=NO;
-  self.window.minSize=NSMakeSize(560,380);
+ if(!self.window){
+  self.window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,760,740) styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable|NSWindowStyleMaskMiniaturizable) backing:NSBackingStoreBuffered defer:NO];
+  self.window.title=@"AIQuota";self.window.releasedWhenClosed=NO;
+  self.window.minSize=NSMakeSize(560,420);self.window.delegate=self;
   NSView *content=self.window.contentView;
-  NSScrollView *scroll=[[NSScrollView alloc] initWithFrame:NSMakeRect(16,84,728,500)];
-  scroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
-  scroll.hasVerticalScroller=YES;
-  self.text=[[NSTextView alloc] initWithFrame:NSMakeRect(0,0,728,500)];
-  self.text.editable=NO;
-  self.text.selectable=YES;
-  self.text.font=[NSFont systemFontOfSize:14];
-  self.text.textContainerInset=NSMakeSize(12,12);
-  self.text.autoresizingMask=NSViewWidthSizable;
-  self.text.textContainer.widthTracksTextView=YES;
-  scroll.documentView=self.text; [content addSubview:scroll];
-  NSScrollView *actionScroll=[[NSScrollView alloc] initWithFrame:NSMakeRect(16,16,728,56)];
-  actionScroll.autoresizingMask=NSViewWidthSizable;
-  actionScroll.hasHorizontalScroller=YES;
-  self.actions=[[NSStackView alloc] initWithFrame:NSMakeRect(0,0,728,40)];
-  self.actions.orientation=NSUserInterfaceLayoutOrientationHorizontal;
-  self.actions.spacing=8; self.actions.alignment=NSLayoutAttributeCenterY;
-  actionScroll.documentView=self.actions; [content addSubview:actionScroll];
+  self.scroll=[[NSScrollView alloc] initWithFrame:content.bounds];
+  self.scroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;self.scroll.hasVerticalScroller=YES;
+  self.document=[[AQDocumentView alloc] initWithFrame:content.bounds];
+  self.scroll.documentView=self.document;[content addSubview:self.scroll];[self render];
  }
  // Open on the display the user is interacting with, not the laptop by default.
  NSPoint pointer=NSEvent.mouseLocation;
- for (NSScreen *screen in NSScreen.screens) {
-  if (NSPointInRect(pointer,screen.frame)) {
+ for(NSScreen *screen in NSScreen.screens){
+  if(NSPointInRect(pointer,screen.frame)){
    NSRect visible=screen.visibleFrame;NSSize size=self.window.frame.size;
    [self.window setFrameOrigin:NSMakePoint(NSMidX(visible)-size.width/2,NSMidY(visible)-size.height/2)];break;
   }
  }
- [self.window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
+ [self.window makeKeyAndOrderFront:nil];[NSApp activateIgnoringOtherApps:YES];
 }
-- (void)handleButton:(NSButton *)button {
- if (button.tag==501) {
-  NSOpenPanel *panel=[NSOpenPanel openPanel];panel.canChooseDirectories=YES;panel.canChooseFiles=NO;panel.allowsMultipleSelection=NO;panel.prompt=@"Monitor workspace";
+- (void)handleManage:(NSPopUpButton *)menu {
+ [self handleIdentifier:menu.selectedItem.tag];[menu selectItemAtIndex:0];
+}
+- (void)handleButton:(NSButton *)button {[self handleIdentifier:button.tag];}
+- (void)handleIdentifier:(NSInteger)identifier {
+ if(identifier==-1){self.showDetails=!self.showDetails;[self render];return;}
+ if(identifier==-2){self.showAllTasks=!self.showAllTasks;[self render];return;}
+ if(identifier==-3){self.showDetails=YES;[self render];[self.document scrollPoint:NSMakePoint(0,MAX(0,self.document.frame.size.height-376))];return;}
+ if(identifier==501){
+  NSOpenPanel *panel=[NSOpenPanel openPanel];panel.canChooseDirectories=YES;panel.canChooseFiles=NO;panel.allowsMultipleSelection=NO;panel.prompt=@"Add workspace";
   [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result){if(result==NSModalResponseOK){aq_workspace((char *)panel.URL.path.UTF8String);}}];
- } else { aq_action((int)button.tag); }
+ } else {aq_action((int)identifier);}
 }
-- (void)wake:(NSNotification *)notification { (void)notification; self.statusItem.visible=YES; aq_action(500); }
-- (void)screenChanged:(NSNotification *)notification { (void)notification; self.statusItem.visible=YES; }
+- (void)wake:(NSNotification *)notification {(void)notification;self.statusItem.visible=YES;aq_action(500);}
+- (void)screenChanged:(NSNotification *)notification {(void)notification;self.statusItem.visible=YES;}
 @end
 
 void aq_configure(void) {
@@ -78,8 +143,7 @@ void aq_configure(void) {
    NSUserDefaults *defaults=[NSUserDefaults standardUserDefaults];
    NSString *key=@"NSStatusItem Preferred Position AIQuota";
    if(![defaults objectForKey:key]){[defaults setDouble:0 forKey:key];}
-   desktop.statusItem.autosaveName=@"AIQuota";
-   desktop.statusItem.visible=YES;
+   desktop.statusItem.autosaveName=@"AIQuota";desktop.statusItem.visible=YES;
   }
   NSApp.delegate=desktop;
   [[NSWorkspace sharedWorkspace].notificationCenter addObserver:desktop selector:@selector(wake:) name:NSWorkspaceDidWakeNotification object:nil];
@@ -88,19 +152,8 @@ void aq_configure(void) {
  });
 }
 void aq_show(void) {dispatch_async(dispatch_get_main_queue(), ^{[desktop showWindow];aq_action(504);});}
-void aq_update(const char *content,const char *buttons) {
- NSString *text=[NSString stringWithUTF8String:content];
- NSData *data=[[NSString stringWithUTF8String:buttons] dataUsingEncoding:NSUTF8StringEncoding];
- NSArray *items=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
- dispatch_async(dispatch_get_main_queue(), ^{
-  if(!desktop.window)return;
-  desktop.text.string=text;
-  for(NSView *view in desktop.actions.arrangedSubviews){[desktop.actions removeArrangedSubview:view];[view removeFromSuperview];}
-  CGFloat width=0;
-  for(NSDictionary *item in items){
-   NSButton *button=[NSButton buttonWithTitle:item[@"title"] target:desktop action:@selector(handleButton:)];
-   button.tag=[item[@"id"] integerValue];[button sizeToFit];width+=button.frame.size.width+8;[desktop.actions addArrangedSubview:button];
-  }
-  [desktop.actions setFrameSize:NSMakeSize(MAX(width,728),40)];
- });
+void aq_update(const char *view) {
+ NSData *data=[[NSString stringWithUTF8String:view] dataUsingEncoding:NSUTF8StringEncoding];
+ NSDictionary *snapshot=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+ dispatch_async(dispatch_get_main_queue(), ^{desktop.view=snapshot;[desktop render];});
 }

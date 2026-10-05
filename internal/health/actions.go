@@ -14,6 +14,8 @@ import (
 
 var targetPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.:/-]*$`)
 
+var cloudTargetPattern = regexp.MustCompile(`^claude\.ai [A-Za-z0-9_][A-Za-z0-9_ .:/-]*$`)
+
 func validTarget(target string) bool { return targetPattern.MatchString(target) }
 func shellQuote(s string) string     { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 
@@ -52,7 +54,8 @@ func LaunchAction(ctx context.Context, a Action, dataDir string) error {
 	default:
 		return fmt.Errorf("unsupported repair action")
 	}
-	if ((a.Kind == "mcp-login" || a.Kind == "aws-login") && !validTarget(a.Target)) || (a.Target != "" && !validTarget(a.Target)) {
+	targetOK := validTarget(a.Target) || (a.Kind == "mcp-login" && a.Host == "claude" && cloudTargetPattern.MatchString(a.Target))
+	if ((a.Kind == "mcp-login" || a.Kind == "aws-login") && !targetOK) || (a.Target != "" && !targetOK) {
 		return fmt.Errorf("invalid action target")
 	}
 	path, err := commandPath(name)

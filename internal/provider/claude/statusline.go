@@ -19,7 +19,8 @@ import (
 const BridgeFlag = "--claude-statusline"
 
 type statusLineInput struct {
-	Model struct {
+	SessionID string `json:"session_id"`
+	Model     struct {
 		DisplayName string `json:"display_name"`
 	} `json:"model"`
 	RateLimits struct {
@@ -42,6 +43,7 @@ func ParseStatusLine(data []byte, now time.Time) (model.ProviderStatus, error) {
 	if err := json.Unmarshal(data, &input); err != nil {
 		return status, fmt.Errorf("decode Claude Code status line: %w", err)
 	}
+	status.Metadata = map[string]string{"session_id": input.SessionID}
 	appendWindow := func(kind model.WindowKind, duration int64, source *rateLimitWindow) {
 		if source == nil || source.ResetsAt <= 0 {
 			return

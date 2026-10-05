@@ -8,7 +8,7 @@ package desktop
 #include <stdlib.h>
 void aq_configure(void);
 void aq_show(void);
-void aq_update(const char* content, const char* buttons);
+void aq_update(const char* view);
 */
 import "C"
 
@@ -16,11 +16,6 @@ import (
 	"encoding/json"
 	"unsafe"
 )
-
-type Button struct {
-	ID    int    `json:"id"`
-	Title string `json:"title"`
-}
 
 var Events = make(chan int, 32)
 var Workspaces = make(chan string, 8)
@@ -42,11 +37,9 @@ func aq_workspace(path *C.char) {
 }
 func Configure() { C.aq_configure() }
 func Show()      { C.aq_show() }
-func Update(content string, buttons []Button) {
-	data, _ := json.Marshal(buttons)
-	text := C.CString(content)
-	actions := C.CString(string(data))
+func Update(view View) {
+	data, _ := json.Marshal(view)
+	text := C.CString(string(data))
 	defer C.free(unsafe.Pointer(text))
-	defer C.free(unsafe.Pointer(actions))
-	C.aq_update(text, actions)
+	C.aq_update(text)
 }

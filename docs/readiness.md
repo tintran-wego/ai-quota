@@ -1,13 +1,13 @@
 # AI readiness monitor
 
-AIQuota keeps quota and connection readiness in one macOS app. The menu badge shows the most urgent quota. A question mark means at least one check is unknown. `AI !N` means N checks need action. Open **Readiness** for each result, its scope, its timestamp, and available repair buttons.
+AIQuota keeps quota and connection readiness in one macOS app. The menu badge shows the most urgent quota. A question mark means at least one check is unknown. `AI !N` means N checks need action. Open **Readiness** for up to five grouped problems and their adjacent repair buttons. **Show all** reveals additional problems. **Show details** holds the full probe results, scopes, and timestamps. **Manage** holds workspace, settings, and host shortcuts. The badge counts repairs, not duplicate workspace results.
 
 The compact status item uses a stable macOS autosave name and an initial position near the system controls. Display and Space changes restore visibility. macOS can still hide status items when a display has insufficient menu space. Reopen AIQuota from Applications to open the readiness window on the display under the pointer.
 
 ## Checks
 
-- Claude Code: `claude mcp list` in each monitored workspace. A successful handshake does not prove backend permissions. Failures must occur twice before an alert.
-- Codex: a separate app-server reads MCP auth status and the tool catalog. Enabled app connectors remain Unknown because the catalog does not prove live OAuth or backend access.
+- Claude Code: `claude mcp list` in each monitored workspace. Cloud catalog entries without a recorded connection are unverified coverage, not login tasks. Known cloud connections and configured MCPs keep their observed auth status. A successful handshake does not prove backend permissions. Failures must occur twice before an alert.
+- Codex: a separate app-server reads MCP auth status and the tool catalog. Before offering OAuth login, AIQuota verifies that the transport uses OAuth. Bearer or header credentials remain unverified until a backend probe can check them. Enabled app connectors remain Unknown because the catalog does not prove live OAuth or backend access.
 - fs-log-data: the local `/api/readiness?force=1` endpoint runs BigQuery dry-run, Athena, Glue, Redis, and API probes. Only loopback URLs are allowed. Stale results remain Unknown.
 - Flights Shopping Hub: the maintained checkout's read-only `preflight.py` checks the selected repository profiles. It checks VPN, tunnels, Jenkins, Docker, AWS, and Cognito as required by those profiles. MCP registration alone remains Unknown.
 
@@ -33,8 +33,10 @@ Repair actions use a fixed allowlist. MCP login opens the correct host CLI in Te
 
 ## Claude quota
 
-Claude status-line quota can lag the account usage page. AIQuota retains the highest observed usage within each reset cycle, under a cross-process file lock, so an older session cannot reduce usage or remove an active window. A new reset cycle can start at lower usage. The window shows the last quota change instead of treating every status-line render as fresh quota. This source is still session-reported; it is not a live account API. A manual quota reset or account switch can require clearing the Claude quota cache, because usage can legitimately fall in the same cycle.
+Claude status-line quota can lag the account usage page. AIQuota accepts a changed report even when usage decreases or its reset time moves earlier. It tracks the last reported window values by session, under a cross-process file lock. An unchanged repaint from a known old session cannot replace a newer report. It does not infer a full quota from a reset countdown.
+
+Older caches from the maximum-usage rule are invalidated automatically. Expired quota and omitted windows wait for a new provider report. The session report history contains hashes and receipt times, never transcript content or credentials. Sources without a session identifier cannot suppress old-session repaints. A previously unseen stale session can still send an old first report; this source is session-reported, not a live account API.
 
 ## Verification
 
-Run `go test ./...`, `go vet ./...`, and `go test -race ./internal/health ./internal/provider/claude`. Regression tests prove an expired auth probe raises an issue, a repeated connection failure sends one alert, recovery clears the badge, registration does not count as auth proof, stale data stays Unknown, and old Claude sessions cannot overwrite newer quota.
+Run `go test ./...`, `go vet ./...`, and `go test -race ./internal/health ./internal/provider/claude`. Regression tests prove an expired auth probe raises an issue, a repeated connection failure sends one alert, recovery clears the badge, registration does not count as auth proof, stale data stays Unknown, and unchanged old-session repaints cannot undo a manual quota reset.
