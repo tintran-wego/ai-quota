@@ -136,6 +136,14 @@ func (s *Service) ClearProvider(provider model.Provider) {
 }
 
 func (s *Service) loadCached(provider model.Provider, path string) {
+	if provider == model.ProviderClaudeCode {
+		status, err := claude.NewCacheProvider(s.paths).Fetch(context.Background())
+		if err != nil {
+			status = model.ProviderStatus{Provider: provider}
+		}
+		s.statuses[provider] = status
+		return
+	}
 	var status model.ProviderStatus
 	if err := storage.ReadJSON(path, &status); err != nil {
 		s.statuses[provider] = model.ProviderStatus{Provider: provider}
@@ -158,6 +166,9 @@ func (s *Service) setError(provider model.Provider, message string) {
 	s.mu.Lock()
 	status := s.statuses[provider]
 	status.Provider = provider
+	if provider == model.ProviderClaudeCode {
+		status.Windows = nil
+	}
 	status.Error = message
 	s.statuses[provider] = status
 	s.mu.Unlock()

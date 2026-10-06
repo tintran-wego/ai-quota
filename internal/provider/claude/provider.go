@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"time"
 
 	"github.com/chuongtrh/ai-quota/internal/config"
 	"github.com/chuongtrh/ai-quota/internal/model"
 	"github.com/chuongtrh/ai-quota/internal/storage"
 )
 
-var ErrNoQuotaData = errors.New("Claude Code has not sent quota data yet; send at least one prompt first")
+var ErrNoQuotaData = errors.New("Waiting for a fresh quota report from Claude Code")
 
 type CacheProvider struct {
 	paths config.Paths
@@ -36,6 +37,19 @@ func (p *CacheProvider) Fetch(ctx context.Context) (model.ProviderStatus, error)
 			return model.ProviderStatus{Provider: p.ID()}, ErrNoQuotaData
 		}
 		return model.ProviderStatus{Provider: p.ID()}, err
+	}
+	if status.Metadata["cache_version"] != "2" {
+		return model.ProviderStatus{Provider: p.ID()}, ErrNoQuotaData
+	}
+	active := status.Windows[:0]
+	for _, window := range status.Windows {
+		if window.ResetsAt.After(time.Now()) {
+			active = append(active, window)
+		}
+	}
+	status.Windows = active
+	if len(active) == 0 {
+		return model.ProviderStatus{Provider: p.ID()}, ErrNoQuotaData
 	}
 	status.Provider = p.ID()
 	status.Normalize()
