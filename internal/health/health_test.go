@@ -91,3 +91,44 @@ func TestExpiredAuthAlertsImmediately(t *testing.T) {
 		t.Fatal("expired credential must alert immediately")
 	}
 }
+
+func TestJenkinsNetworkFailureUsesItsFailedTunnelRepair(t *testing.T) {
+	checks, err := parseHub([]byte(`{"checks":[{"id":"jenkins:prod","status":"unreachable"},{"id":"tunnel:prod","status":"unreachable"},{"id":"jenkins:staging","status":"unreachable"},{"id":"tunnel:staging","status":"unreachable"}]}`), "/hub", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachJenkinsTunnelActions(checks)
+	for _, c := range checks {
+		if c.Action == nil || c.Action.Kind != "tunnel" {
+			t.Fatalf("network failure became an auth task instead of its tunnel repair: %+v", c)
+		}
+		want := "production"
+		if c.Name == "jenkins:staging" || c.Name == "tunnel:staging" {
+			want = "staging"
+		}
+		if c.Action.Target != want {
+			t.Fatalf("wrong environment for the tunnel repair: %+v", c)
+		}
+	}
+	if tasks := Tasks(Report{Checks: checks}); len(tasks) != 2 {
+		t.Fatalf("Jenkins and its tunnel must share one repair per environment: %+v", tasks)
+	}
+}
+
+func TestJenkinsDoesNotOfferTunnelForTokenOrUnverifiedNetworkFailure(t *testing.T) {
+	for _, tc := range []struct{ status, tunnel string }{
+		{"missing", "unreachable"}, {"expired", "unreachable"}, {"unreachable", "ok"}, {"unreachable", "unknown"},
+	} {
+		t.Run(tc.status+"/"+tc.tunnel, func(t *testing.T) {
+			data := fmt.Sprintf(`{"checks":[{"id":"jenkins:prod","status":%q},{"id":"tunnel:prod","status":%q}]}`, tc.status, tc.tunnel)
+			checks, err := parseHub([]byte(data), "/hub", time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			attachJenkinsTunnelActions(checks)
+			if checks[0].Action != nil {
+				t.Fatalf("unproven tunnel repair or OAuth sign-in offered: %+v", checks[0])
+			}
+		})
+	}
+}

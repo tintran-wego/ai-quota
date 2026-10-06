@@ -31,7 +31,11 @@ An empty readiness URL disables that adapter. Hub checks are disabled until a ch
 
 Repair actions use a fixed allowlist. **Sign in** opens the browser through the owning host's supported login command, with no Terminal window. AIQuota keeps the callback process alive until completion and shows progress or a short failure beside the button. Duplicate clicks cannot start a second callback for the same repair. Claude receives an invisible PTY because its CLI requires a terminal during the callback; its process group is cancelled on Quit or when the login deadline expires. Login output is discarded. Credentials stay in their existing stores.
 
+After the callback completes, the button shows **Checking** until a probe started after that sign-in finishes. An older probe cannot end this verification. Claude and Codex keep separate OAuth grants, and each server endpoint has its own grant. Signing in for one host or environment does not sign in for another.
+
 AWS SSO login requires an explicit profile from the readiness response or the fs-log-data credential source selector. No profile is inferred from the environment name. GCP login is offered only for an explicit ADC source. Cognito refresh uses the maintained Hub browser script, which saves its own Playwright state after browser sign-in. Docker and VPN buttons open their apps. Only the tunnel buttons open Terminal to run the existing `blackhole_us_staging` or `blackhole_us_production` shell function. Missing Jenkins secrets and unverified cloud connectors require repair in their existing settings.
+
+Jenkins MCP gateway login and direct Jenkins access are separate checks. A direct Jenkins network failure shares **Start tunnel** with its environment's tunnel only when that tunnel also fails. Missing or rejected Jenkins API credentials stay separate; browser OAuth does not replace the API token. A successful gateway handshake does not prove that the direct builder is reachable.
 
 The supported Codex OAuth command is documented in [OpenAI MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli). Opening a browser or completing sign-in does not prove backend access; the subsequent probe must succeed before the issue clears.
 

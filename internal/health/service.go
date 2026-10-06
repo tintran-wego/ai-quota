@@ -11,27 +11,30 @@ import (
 )
 
 type Service struct {
-	Updates      chan struct{}
-	mu           sync.Mutex
-	config       Config
-	dataDir      string
-	report       Report
-	lastCheck    time.Time
-	failures     map[string]int
-	notified     map[string]State
-	notify       func(string, string) error
-	now          func() time.Time
-	actions      map[string]ActionStatus
-	launchAction func(context.Context, Action, string) error
-	afterAuth    bool
-	checking     bool
-	actionWG     sync.WaitGroup
-	closing      bool
+	Updates         chan struct{}
+	mu              sync.Mutex
+	config          Config
+	dataDir         string
+	report          Report
+	lastCheck       time.Time
+	failures        map[string]int
+	notified        map[string]State
+	notify          func(string, string) error
+	now             func() time.Time
+	actions         map[string]ActionStatus
+	launchAction    func(context.Context, Action, string) error
+	afterAuth       bool
+	checking        bool
+	checkGeneration uint64
+	actionWG        sync.WaitGroup
+	closing         bool
 }
 
 type ActionStatus struct {
-	Running bool
-	Error   string
+	Running          bool
+	Verifying        bool
+	Error            string
+	verifyGeneration uint64
 }
 
 func New(dataDir string, notify func(string, string) error) *Service {
@@ -125,6 +128,7 @@ func (s *Service) Check(ctx context.Context) {
 	}
 	s.report.Checking = true
 	s.checking = true
+	s.checkGeneration++
 	s.afterAuth = false
 	s.mu.Unlock()
 	defer s.checkAfterAuth(ctx)
@@ -175,6 +179,12 @@ func (s *Service) Check(ctx context.Context) {
 
 func (s *Service) publish(checks []Check, now time.Time) {
 	s.mu.Lock()
+	for key, status := range s.actions {
+		if status.Verifying && status.verifyGeneration <= s.checkGeneration {
+			status.Verifying = false
+			s.actions[key] = status
+		}
+	}
 	notices := []Check{}
 	pending := false
 	for i, c := range checks {
@@ -234,7 +244,7 @@ func (s *Service) RunAction(ctx context.Context, a Action) error {
 		s.mu.Unlock()
 		return context.Canceled
 	}
-	if s.actions[key].Running {
+	if s.actions[key].Running || s.actions[key].Verifying {
 		s.mu.Unlock()
 		return nil
 	}
@@ -248,6 +258,9 @@ func (s *Service) RunAction(ctx context.Context, a Action) error {
 	status := ActionStatus{}
 	if err != nil {
 		status.Error = err.Error()
+	} else if a.Kind != "open-app" && a.Kind != "tunnel" {
+		status.Verifying = true
+		status.verifyGeneration = s.checkGeneration + 1
 	}
 	s.actions[key] = status
 	if err == nil && a.Kind != "open-app" && a.Kind != "tunnel" {

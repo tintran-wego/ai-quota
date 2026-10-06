@@ -59,6 +59,10 @@ func applyActionStatus(task *desktop.Task, status health.ActionStatus) {
 		task.Action.Title = "Signing in…"
 		task.Action.Disabled = true
 		task.Detail = "Complete sign-in in the browser. This connection will be checked again."
+	} else if status.Verifying {
+		task.Action.Title = "Checking…"
+		task.Action.Disabled = true
+		task.Detail = "Sign-in completed. Checking this connection."
 	} else if status.Error != "" {
 		task.Detail = status.Error
 	}
@@ -185,6 +189,10 @@ func taskText(task health.Task) (title, detail, action string) {
 	case "tunnel":
 		title, action = "Tunnel · "+repair.Target, "Start tunnel"
 		detail = "Required tunnel is unreachable."
+		if strings.HasPrefix(check.Name, "jenkins:") {
+			title = "Jenkins · " + repair.Target
+			detail = "Private Jenkins is unreachable. Start the tunnel, then check again."
+		}
 	default:
 		action = "Fix connection"
 	}

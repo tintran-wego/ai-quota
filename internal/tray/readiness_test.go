@@ -17,6 +17,11 @@ func TestSignInShowsProgressAndRetryableFailure(t *testing.T) {
 	if !task.Action.Disabled || !strings.Contains(task.Detail, "browser") {
 		t.Fatal("active sign-in must show browser guidance and prevent duplicate clicks")
 	}
+	task = desktop.Task{Detail: "Sign-in expired or required.", Action: desktop.Button{Title: "Sign in"}}
+	applyActionStatus(&task, health.ActionStatus{Verifying: true})
+	if !task.Action.Disabled || task.Action.Title != "Checking…" || task.Detail != "Sign-in completed. Checking this connection." {
+		t.Fatal("completed sign-in must wait for a fresh connection check before enabling another login")
+	}
 	task = desktop.Task{Action: desktop.Button{Title: "Sign in"}}
 	applyActionStatus(&task, health.ActionStatus{Error: "Sign-in timed out. Try again."})
 	if task.Action.Disabled || task.Action.Title != "Sign in" || task.Detail != "Sign-in timed out. Try again." {
@@ -83,6 +88,22 @@ func TestOverviewRetainsEveryProblemForShowAll(t *testing.T) {
 	view := readinessView(report, nil, now)
 	if len(view.Tasks) != 8 || view.Summary != "8 problems to fix" {
 		t.Fatal("the native initial limit must not discard hidden problem rows")
+	}
+}
+
+func TestPrivateJenkinsUsesTunnelRepairWithoutAnotherSignIn(t *testing.T) {
+	now := time.Now()
+	repair := &health.Action{Kind: "tunnel", Target: "production"}
+	view := readinessView(health.Report{CheckedAt: now, Checks: []health.Check{
+		{ID: "hub/repo/jenkins:production", Host: "Flights Shopping Hub", Name: "jenkins:production", State: health.Failed, Scope: "repo", Action: repair},
+		{ID: "hub/repo/tunnel:production", Host: "Flights Shopping Hub", Name: "tunnel:production", State: health.Failed, Scope: "repo", Action: repair},
+	}}, nil, now)
+	if len(view.Tasks) != 1 {
+		t.Fatalf("Jenkins and its failed tunnel must share one repair: %+v", view.Tasks)
+	}
+	task := view.Tasks[0]
+	if task.Title != "Jenkins · production" || task.Action.Title != "Start tunnel" || task.Detail != "Private Jenkins is unreachable. Start the tunnel, then check again." {
+		t.Fatalf("private Jenkins reachability must offer the tunnel instead of sign-in: %+v", task)
 	}
 }
 

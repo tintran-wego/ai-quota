@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const jenkinsNetworkDetail = "Direct Jenkins is unreachable; check VPN and its environment tunnel"
+
 // Run the maintained Hub's read-only preflight. Credentials stay with its probes.
 func probeHub(ctx context.Context, config Config, now time.Time) []Check {
 	fallback := Check{ID: "hub/preflight", Host: "Flights Shopping Hub", Name: "Preflight", Scope: config.HubCheckout, State: Unknown, CheckedAt: now, Detail: "Hub preflight unavailable or timed out; check the maintained checkout and repo profiles"}
@@ -37,7 +39,32 @@ func probeHub(ctx context.Context, config Config, now time.Time) []Check {
 	if runErr != nil || len(checks) == 0 {
 		checks = append(checks, fallback)
 	}
+	attachJenkinsTunnelActions(checks)
 	return checks
+}
+
+// A gateway OAuth grant cannot repair direct Jenkins reachability. Offer the
+// existing tunnel repair only when that same environment's tunnel also failed.
+func attachJenkinsTunnelActions(checks []Check) {
+	tunnels := map[string]Action{}
+	for _, c := range checks {
+		if c.Host == "Flights Shopping Hub" && c.State == Failed && c.Action != nil && c.Action.Kind == "tunnel" {
+			tunnels[c.Scope+"\x00"+c.Action.Target] = *c.Action
+		}
+	}
+	for i := range checks {
+		c := &checks[i]
+		if c.Host != "Flights Shopping Hub" || c.State != Failed || c.Detail != jenkinsNetworkDetail {
+			continue
+		}
+		env := strings.TrimPrefix(c.Name, "jenkins:")
+		if env == "prod" {
+			env = "production"
+		}
+		if action, ok := tunnels[c.Scope+"\x00"+env]; ok {
+			c.Action = &action
+		}
+	}
 }
 
 func parseHub(data []byte, checkout string, now time.Time) ([]Check, error) {
@@ -66,6 +93,16 @@ func parseHub(data []byte, checkout string, now time.Time) ([]Check, error) {
 		case "unreachable":
 			c.State = Failed
 			c.Detail = "Service unreachable; check VPN, tunnel, or daemon"
+		}
+		if strings.HasPrefix(row.ID, "jenkins:") {
+			switch row.Status {
+			case "unreachable":
+				c.Detail = jenkinsNetworkDetail
+			case "missing":
+				c.Detail = "Jenkins API user or token is missing; configure it in Hub onboarding"
+			case "expired":
+				c.Detail = "Jenkins API credentials were rejected; refresh the API token in Hub onboarding"
+			}
 		}
 		// Canonical MCP rows only test registration, never backend permissions.
 		if strings.HasSuffix(row.ID, "-mcp") && c.State == OK {
